@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galaxy Shooter</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #fff;
+            font-size: 24px;
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        .menu button {
+            font-size: 20px;
+            padding: 10px 20px;
+            margin: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .menu button:hover {
+            background-color: #45a049;
+        }
+        #score, #level {
+            position: absolute;
+            color: #fff;
+            font-size: 20px;
+        }
+        #score { top: 10px; left: 10px; }
+        #level { top: 10px; right: 10px; }
+    </style>
+</head>
+<body>
+    <svg id="gameCanvas"></svg>
+    <div id="mainMenu" class="menu">
+        <h1>Galaxy Shooter</h1>
+        <button id="startButton">Start Game</button>
+    </div>
+    <div id="difficultyMenu" class="menu" style="display: none;">
+        <h2>Select Difficulty</h2>
+        <button id="easyButton">Easy</button>
+        <button id="normalButton">Normal</button>
+        <button id="hardButton">Hard</button>
+        <button id="godModeButton">God Mode</button>
+    </div>
+    <div id="gameOver" class="menu" style="display: none;">
+        <h2>Game Over</h2>
+        <p>Your Score: <span id="finalScore"></span></p>
+        <button id="restartButton">Play Again</button>
+        <button id="mainMenuButton">Main Menu</button>
+    </div>
+    <div id="score">Score: <span id="scoreValue">0</span></div>
+    <div id="level">Level: <span id="levelValue">Easy</span></div>
+
+    <script>
+        const svgNS = "http://www.w3.org/2000/svg";
+        const canvas = document.getElementById('gameCanvas');
+        const mainMenu = document.getElementById('mainMenu');
+        const difficultyMenu = document.getElementById('difficultyMenu');
+        const gameOverMenu = document.getElementById('gameOver');
+        const scoreDisplay = document.getElementById('scoreValue');
+        const levelDisplay = document.getElementById('levelValue');
+        const finalScoreDisplay = document.getElementById('finalScore');
+
+        let player, gameLoop, enemies = [], playerBullets = [], enemyBullets = [], stars = [];
+        let score = 0;
+        let gameState = 'menu';
+        let keys = {};
+        let difficulty = 'easy';
+
+        const difficultySettings = {
+            easy: { enemySpeed: 1, enemyShootChance: 0.005, enemyBulletSpeed: 3 },
+            normal: { enemySpeed: 1.5, enemyShootChance: 0.01, enemyBulletSpeed: 4 },
+            hard: { enemySpeed: 2, enemyShootChance: 0.015, enemyBulletSpeed: 5 },
+            godMode: { enemySpeed: 2.5, enemyShootChance: 0.02, enemyBulletSpeed: 6 }
+        };
+
+        function setCanvasSize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            canvas.setAttribute('width', width);
+            canvas.setAttribute('height', height);
+            canvas.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        }
+
+        window.addEventListener('resize', setCanvasSize);
+        setCanvasSize();
+
+        function createSVGElement(type, attributes) {
+            const element = document.createElementNS(svgNS, type);
+            for (let key in attributes) {
+                element.setAttribute(key, attributes[key]);
+            }
+            return element;
+        }
+
+        class GameObject {
+            constructor(x, y, element) {
+                this.x = x;
+                this.y = y;
+                this.element = element;
+                canvas.appendChild(this.element);
+            }
+
+            update() {
+                this.element.setAttribute('transform', `translate(${this.x}, ${this.y})`);
+            }
+
+            remove() {
+                canvas.removeChild(this.element);
+            }
+        }
+
+        class Player extends GameObject {
+            constructor(x, y) {
+                const group = createSVGElement('g', {});
+                const ship = createSVGElement('path', {
+                    d: `
+                        M0,-30 L15,-15 L15,20 L10,25 L-10,25 L-15,20 L-15,-15 Z
+                        M-15,-5 L-25,-5 L-25,5 L-15,5 Z
+                        M15,-5 L25,-5 L25,5 L15,5 Z
+                        M-8,-30 L-4,-40 L4,-40 L8,-30 Z
+                    `,
+                    fill: '#00ff00',
+                    stroke: '#ffffff',
+                    'stroke-width': '2'
+                });
+                const engineGlow = createSVGElement('circle', {
+                    cx: '0',
+                    cy: '25',
+                    r: '5',
+                    fill: '#00ffff'
+                });
+                group.appendChild(ship);
+                group.appendChild(engineGlow);
+                super(x, y, group);
+                this.speed = 8;
+                this.update();
+            }
+
+            move() {
+                const dx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+                const dy = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+                const canvasWidth = canvas.width.baseVal.value;
+                const canvasHeight = canvas.height.baseVal.value;
+                this.x = Math.max(30, Math.min(canvasWidth - 30, this.x + dx * this.speed));
+                this.y = Math.max(40, Math.min(canvasHeight - 40, this.y + dy * this.speed));
+                this.update();
+            }
+
+            shoot() {
+                playerBullets.push(new Bullet(this.x, this.y - 40, 'player'));
+            }
+        }
+
+        class Enemy extends GameObject {
+            constructor() {
+                const group = createSVGElement('g', {});
+                const shipType = Math.floor(Math.random() * 3);
+                let shipPath;
+                
+                switch(shipType) {
+                    case 0:
+                        shipPath = `
+                            M0,20 L20,0 L10,-20 L-10,-20 L-20,0 Z
+                            M-15,0 L-25,10 L-15,10 Z
+                            M15,0 L25,10 L15,10 Z
+                        `;
+                        break;
+                    case 1:
+                        shipPath = `
+                            M0,-20 C20,-20 20,20 0,20 C-20,20 -20,-20 0,-20
+                            M-5,-25 L5,-25 L0,-30 Z
+                            M-15,0 L-20,5 L-15,10 L-10,5 Z
+                            M15,0 L20,5 L15,10 L10,5 Z
+                        `;
+                        break;
+                    case 2:
+                        shipPath = `
+                            M-15,20 L0,-20 L15,20 Z
+                            M-15,10 L-25,15 L-15,20 Z
+                            M15,10 L25,15 L15,20 Z
+                            M-8,-15 L0,-25 L8,-15 Z
+                        `;
+                        break;
+                }
+
+                const ship = createSVGElement('path', {
+                    d: shipPath,
+                    fill: '#ff0000',
+                    stroke: '#ffffff',
+                    'stroke-width': '2'
+                });
+                group.appendChild(ship);
+                
+                const canvasWidth = canvas.width.baseVal.value;
+                super(Math.random() * (canvasWidth - 60) + 30, -30, group);
+                this.speed = difficultySettings[difficulty].enemySpeed * (Math.random() * 0.5 + 0.75);
+                this.shootCooldown = 0;
+            }
+
+            update() {
+                super.update();
+                this.y += this.speed;
+                if (this.y > canvas.height.baseVal.value) {
+                    this.remove();
+                    enemies = enemies.filter(e => e !== this);
+                }
+
+                if (this.shootCooldown > 0) {
+                    this.shootCooldown--;
+                } else if (Math.random() < difficultySettings[difficulty].enemyShootChance) {
+                    this.shoot();
+                    this.shootCooldown = 60;
+                }
+            }
+
+            shoot() {
+                if (player) {
+                    const dx = player.x - this.x;
+                    const dy = player.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const vx = (dx / distance) * difficultySettings[difficulty].enemyBulletSpeed;
+                    const vy = (dy / distance) * difficultySettings[difficulty].enemyBulletSpeed;
+                    enemyBullets.push(new Bullet(this.x, this.y + 20, 'enemy', vx, vy));
+                }
+            }
+        }
+
+        class Bullet extends GameObject {
+            constructor(x, y, type, vx = 0, vy = -10) {
+                const bullet = createSVGElement('path', {
+                    d: 'M0,-5 L3,5 L-3,5 Z',
+                    fill: type === 'player' ? '#ffff00' : '#ff6600'
+                });
+                super(x, y, bullet);
+                this.vx = vx;
+                this.vy = vy;
+                this.type = type;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                super.update();
+                const canvasHeight = canvas.height.baseVal.value;
+                const canvasWidth = canvas.width.baseVal.value;
+                if (this.y < 0 || this.y > canvasHeight || this.x < 0 || this.x > canvasWidth) {
+                    this.remove();
+                    if (this.type === 'player') {
+                        playerBullets = playerBullets.filter(b => b !== this);
+                    } else {
+                        enemyBullets = enemyBullets.filter(b => b !== this);
+                    }
+                }
+            }
+        }
+
+        class Star extends GameObject {
+            constructor() {
+                const star = createSVGElement('circle', {
+                    r: Math.random() * 1.5 + 0.5,
+                    fill: '#ffffff'
+                });
+                const canvasWidth = canvas.width.baseVal.value;
+                const canvasHeight = canvas.height.baseVal.value;
+                super(Math.random() * canvasWidth, Math.random() * canvasHeight, star);
+                this.speed = Math.random() * 0.5 + 0.1;
+            }
+
+            update() {
+                super.update();
+                this.y += this.speed;
+                if (this.y > canvas.height.baseVal.value) {
+                    this.y = 0;
+                    this.x = Math.random() * canvas.width.baseVal.value;
+                }
+            }
+        }
+
+        function checkCollisions() {
+            for (let enemy of enemies) {
+                for (let bullet of playerBullets) {
+                    if (Math.abs(enemy.x - bullet.x) < 30 && Math.abs(enemy.y - bullet.y) < 30) {
+                        enemy.remove();
+                        bullet.remove();
+                        enemies = enemies.filter(e => e !== enemy);
+                        playerBullets = playerBullets.filter(b => b !== bullet);
+                        score += 10;
+                        scoreDisplay.textContent = score;
+                    }
+                }
+
+                if (Math.abs(enemy.x - player.x) < 30 && Math.abs(enemy.y - player.y) < 30) {
+                    gameOver();
+                }
+            }
+
+            for (let bullet of enemyBullets) {
+                if (Math.abs(player.x - bullet.x) < 30 && Math.abs(player.y - bullet.y) < 30) {
+                    gameOver();
+                }
+            }
+        }
+
+        function gameOver() {
+            gameState = 'over';
+            cancelAnimationFrame(gameLoop);
+            gameOverMenu.style.display = 'block';
+            finalScoreDisplay.textContent = score;
+        }
+
+        function clearAllGameObjects() {
+            [...enemies, ...playerBullets, ...enemyBullets, ...stars, player].forEach(obj => {
+                if (obj && obj.remove) obj.remove();
+            });
+            
+            enemies = [];
+            playerBullets = [];
+            enemyBullets = [];
+            stars = [];
+            player = null;
+        }
+
+        function startGame() {
+            clearAllGameObjects();
+            
+            gameState = 'playing';
+            mainMenu.style.display = 'none';
+            difficultyMenu.style.display = 'none';
+            gameOverMenu.style.display = 'none';
+            score = 0;
+            scoreDisplay.textContent = score;
+            levelDisplay.textContent = difficulty.charAt(0).toUpperCase() + difficulty.slice(1);
+
+            const canvasWidth = canvas.width.baseVal.value;
+            const canvasHeight = canvas.height.baseVal.value;
+            
+            player = new Player(canvasWidth / 2, canvasHeight - 60);
+
+            for (let i = 0; i < 100; i++) {
+                stars.push(new Star());
+            }
+
+            gameLoop = requestAnimationFrame(update);
+        }
+
+        function update() {
+            if (gameState === 'playing') {
+                player.move();
+        
+                for (let star of stars) {
+                    star.update();
+                }
+        
+                for (let enemy of enemies) {
+                    enemy.update();
+                }
+        
+                for (let bullet of playerBullets) {
+                    bullet.update();
+                }
+        
+                for (let bullet of enemyBullets) {
+                    bullet.update();
+                }
+        
+                if (Math.random() < 0.02 * difficultySettings[difficulty].enemySpeed) {
+                    enemies.push(new Enemy());
+                }
+        
+                checkCollisions();
+        
+                gameLoop = requestAnimationFrame(update);
+            }
+        }
+        
+        document.addEventListener('keydown', (e) => {
+            if (gameState === 'playing') {
+                keys[e.code] = true;
+                if (e.code === 'Space') {
+                    player.shoot();
+                }
+                if (e.code === 'Escape') {
+                    pauseGame();
+                }
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+        
+        function pauseGame() {
+            if (gameState === 'playing') {
+                gameState = 'paused';
+                cancelAnimationFrame(gameLoop);
+                showPauseMenu();
+            } else if (gameState === 'paused') {
+                gameState = 'playing';
+                gameLoop = requestAnimationFrame(update);
+                hidePauseMenu();
+            }
+        }
+        
+        function showPauseMenu() {
+            const pauseMenu = document.createElement('div');
+            pauseMenu.id = 'pauseMenu';
+            pauseMenu.className = 'menu';
+            pauseMenu.innerHTML = `
+                <h2>Game Paused</h2>
+                <button id="resumeButton">Resume</button>
+                <button id="quitButton">Quit to Main Menu</button>
+            `;
+            document.body.appendChild(pauseMenu);
+        
+            document.getElementById('resumeButton').addEventListener('click', pauseGame);
+            document.getElementById('quitButton').addEventListener('click', quitToMainMenu);
+        }
+        
+        function hidePauseMenu() {
+            const pauseMenu = document.getElementById('pauseMenu');
+            if (pauseMenu) {
+                pauseMenu.remove();
+            }
+        }
+        
+        function quitToMainMenu() {
+            gameState = 'menu';
+            clearAllGameObjects();
+            hidePauseMenu();
+            mainMenu.style.display = 'block';
+        }
+        
+        document.getElementById('startButton').addEventListener('click', () => {
+            mainMenu.style.display = 'none';
+            difficultyMenu.style.display = 'block';
+        });
+        
+        document.getElementById('easyButton').addEventListener('click', () => {
+            difficulty = 'easy';
+            startGame();
+        });
+        
+        document.getElementById('normalButton').addEventListener('click', () => {
+            difficulty = 'normal';
+            startGame();
+        });
+        
+        document.getElementById('hardButton').addEventListener('click', () => {
+            difficulty = 'hard';
+            startGame();
+        });
+        
+        document.getElementById('godModeButton').addEventListener('click', () => {
+            difficulty = 'godMode';
+            startGame();
+        });
+        
+        document.getElementById('restartButton').addEventListener('click', () => {
+            difficulty = 'easy';
+            startGame();
+        });
+        
+        document.getElementById('mainMenuButton').addEventListener('click', quitToMainMenu);
+        
+        // Initial setup
+        setCanvasSize();
+        mainMenu.style.display = 'block';
+    </script>
+</body>
+</html>
